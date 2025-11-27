@@ -24,6 +24,40 @@ struct FileEntry {
     size: u64,
 }
 
+fn normalize_input_path(s: &str) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        return s.replace('/', "\\");
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        return s.to_string();
+    }
+}
+
+fn is_hidden(path: &Path) -> bool {
+    // Check if filename starts with dot (Unix-style hidden)
+    if let Some(name) = path.file_name() {
+        if let Some(name_str) = name.to_str() {
+            if name_str.starts_with('.') {
+                return true;
+            }
+        }
+    }
+    
+    // On Windows, check hidden attribute
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if let Ok(metadata) = path.metadata() {
+            const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+            return (metadata.file_attributes() & FILE_ATTRIBUTE_HIDDEN) != 0;
+        }
+    }
+    
+    false
+}
+
 fn canonical_within(root: &Path, candidate: &Path) -> Result<PathBuf, String> {
     let root = root
         .canonicalize()
@@ -83,11 +117,32 @@ fn list_candidate_mounts() -> Result<Vec<MountPoint>, String> {
         // On other OSes, just return empty list for now.
     }
 
+    #[cfg(target_os = "windows")]
+    {
+        use std::path::Path;
+        // Iterate drive letters A:..Z: and return those that exist
+        for letter in b'A'..=b'Z' {
+            let drive = format!("{}:\\", letter as char);
+            let p = Path::new(&drive);
+            if p.exists() && p.is_dir() {
+                mounts.push(MountPoint {
+                    path: p.display().to_string(),
+                    label: drive.clone(),
+                });
+            }
+        }
+    }
+
+    #[cfg(all(not(target_os = "linux"), not(target_os = "windows")))]
+    {
+        // On other OSes, just return empty list for now.
+    }
+
     Ok(mounts)
 }
 
 #[tauri::command]
-fn list_files(root: &str) -> Result<Vec<FileEntry>, String> {
+fn list_files(root: &str, show_hidden: bool) -> Result<Vec<FileEntry>, String> {
     let root_path = PathBuf::from(root);
     let root_canon = root_path
         .canonicalize()
@@ -100,17 +155,28 @@ fn list_files(root: &str) -> Result<Vec<FileEntry>, String> {
         let read_dir = fs::read_dir(&dir).map_err(|e| format!("Failed to read dir {}: {e}", dir.display()))?;
         for entry in read_dir.flatten() {
             let p = entry.path();
-            let rel = p.strip_prefix(&root_canon).unwrap_or(&p);
-            if p.is_dir() {
-                stack.push(p);
-            } else if p.is_file() {
-                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                result.push(FileEntry {
-                    path: p.display().to_string(),
-                    relative_path: rel.display().to_string(),
-                    size,
-                });
+            
+            // Skip hidden files if show_hidden is false
+            if !show_hidden && is_hidden(&p) {
+                continue;
             }
+            
+            let rel = p.strip_prefix(&root_canon).unwrap_or(&p);
+                if p.is_dir() {
+                    stack.push(p);
+                } else if p.is_file() {
+                    let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                    // Normalize relative path to use forward slashes for the frontend
+                    let mut rel_str = rel.display().to_string();
+                    if cfg!(windows) {
+                        rel_str = rel_str.replace("\\", "/");
+                    }
+                    result.push(FileEntry {
+                        path: p.display().to_string(),
+                        relative_path: rel_str,
+                        size,
+                    });
+                }
         }
     }
     // Sort by relative_path for stable display
@@ -121,7 +187,8 @@ fn list_files(root: &str) -> Result<Vec<FileEntry>, String> {
 #[tauri::command]
 fn rename_file(root: &str, relative_path: &str, new_name: &str) -> Result<(), String> {
     let root = PathBuf::from(root);
-    let abs_path = canonical_within(&root, &root.join(relative_path))?;
+    let rel_norm = normalize_input_path(relative_path);
+    let abs_path = canonical_within(&root, &root.join(rel_norm))?;
     if !abs_path.is_file() {
         return Err("Target is not a file".into());
     }
@@ -141,7 +208,8 @@ fn rename_file(root: &str, relative_path: &str, new_name: &str) -> Result<(), St
 #[tauri::command]
 fn delete_file(root: &str, relative_path: &str) -> Result<(), String> {
     let root = PathBuf::from(root);
-    let abs_path = canonical_within(&root, &root.join(relative_path))?;
+    let rel_norm = normalize_input_path(relative_path);
+    let abs_path = canonical_within(&root, &root.join(rel_norm))?;
     if abs_path.is_file() {
         fs::remove_file(&abs_path).map_err(|e| format!("Delete failed: {e}"))?;
         Ok(())
@@ -155,7 +223,8 @@ fn move_file(root: &str, from_relative: &str, to_relative_dir: &str, create_dir:
     let root = PathBuf::from(root);
     let root_canon = root.canonicalize().map_err(|e| format!("Invalid root: {e}"))?;
     
-    let src_abs = canonical_within(&root, &root.join(from_relative))?;
+    let from_norm = normalize_input_path(from_relative);
+    let src_abs = canonical_within(&root, &root.join(from_norm))?;
     if !src_abs.is_file() {
         return Err("Source is not a file".into());
     }
@@ -168,7 +237,8 @@ fn move_file(root: &str, from_relative: &str, to_relative_dir: &str, create_dir:
     } else {
         // Remove leading slash if present
         let clean_path = to_relative_dir.trim_start_matches('/');
-        root.join(clean_path)
+        let clean_norm = normalize_input_path(clean_path);
+        root.join(clean_norm)
     };
     
     // Validate destination is within root
@@ -201,7 +271,8 @@ fn move_file(root: &str, from_relative: &str, to_relative_dir: &str, create_dir:
 #[tauri::command]
 fn create_folder(root: &str, relative_dir: &str) -> Result<(), String> {
     let root = PathBuf::from(root);
-    let target = root.join(relative_dir);
+    let rel_norm = normalize_input_path(relative_dir);
+    let target = root.join(rel_norm);
     // Ensure target is within root (can't canonicalize new path before it's created, so validate parent)
     let parent = target.parent().unwrap_or(&root);
     let _ = canonical_within(&root, parent)?;

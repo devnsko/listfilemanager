@@ -15,6 +15,7 @@
   let newFolderName = "";
   let filteredFiles: FileEntry[] = [];
   let darkMode = false;
+  let showHidden = false;
   let filterInput: HTMLInputElement;
 
   // Helper to get filename and directory
@@ -37,6 +38,14 @@
     darkMode = !darkMode;
     localStorage.setItem("theme", darkMode ? "dark" : "light");
     document.body.className = darkMode ? 'dark' : '';
+  }
+
+  function toggleHidden() {
+    showHidden = !showHidden;
+    localStorage.setItem("showHidden", showHidden ? "true" : "false");
+    if (selectedMount) {
+      loadFiles();
+    }
   }
 
   async function refreshMounts() {
@@ -65,7 +74,7 @@
     if (!selectedMount) return;
     status = "Loading files...";
     try {
-      files = await invoke<FileEntry[]>("list_files", { root: selectedMount });
+      files = await invoke<FileEntry[]>("list_files", { root: selectedMount, showHidden: showHidden });
       status = `Loaded ${files.length} files.`;
       applyFilter();
     } catch (e) {
@@ -182,12 +191,20 @@
       e.preventDefault();
       toggleTheme();
     }
+    // Ctrl/Cmd + H: Toggle hidden files
+    if ((e.ctrlKey || e.metaKey) && e.key === "h") {
+      e.preventDefault();
+      toggleHidden();
+    }
   }
 
   onMount(() => {
     refreshMounts();
     const savedTheme = localStorage.getItem("theme");
     darkMode = savedTheme === "dark" || (!savedTheme && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    
+    const savedShowHidden = localStorage.getItem("showHidden");
+    showHidden = savedShowHidden === "true";
     
     // Apply theme immediately
     document.body.className = darkMode ? 'dark' : '';
@@ -210,25 +227,38 @@
 <main class="container">
   <header>
     <h1>SD Cards Manager</h1>
-    <button class="theme-toggle" on:click={toggleTheme} title="Toggle theme (Ctrl+D)">
-      {#if darkMode}
+    <div class="header-actions">
+      <button class="theme-toggle" on:click={toggleHidden} title="Toggle hidden files (Ctrl+H)" class:active={showHidden}>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="5"/>
-          <line x1="12" y1="1" x2="12" y2="3"/>
-          <line x1="12" y1="21" x2="12" y2="23"/>
-          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
-          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-          <line x1="1" y1="12" x2="3" y2="12"/>
-          <line x1="21" y1="12" x2="23" y2="12"/>
-          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
-          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+          {#if showHidden}
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+            <circle cx="12" cy="12" r="3"/>
+          {:else}
+            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+            <line x1="1" y1="1" x2="23" y2="23"/>
+          {/if}
         </svg>
-      {:else}
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-        </svg>
-      {/if}
-    </button>
+      </button>
+      <button class="theme-toggle" on:click={toggleTheme} title="Toggle theme (Ctrl+D)">
+        {#if darkMode}
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="5"/>
+            <line x1="12" y1="1" x2="12" y2="3"/>
+            <line x1="12" y1="21" x2="12" y2="23"/>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+            <line x1="1" y1="12" x2="3" y2="12"/>
+            <line x1="21" y1="12" x2="23" y2="12"/>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+          </svg>
+        {:else}
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          </svg>
+        {/if}
+      </button>
+    </div>
   </header>
 
   <div class="toolbar">
@@ -326,11 +356,13 @@
       </svg>
       <p>Select a mount or open a directory to get started</p>
       <p class="shortcuts">
-        <kbd>Ctrl+O</kbd> to open · <kbd>Ctrl+R</kbd> to refresh · <kbd>Ctrl+D</kbd> for theme
+        <kbd>Ctrl+O</kbd> to open · <kbd>Ctrl+R</kbd> to refresh · <kbd>Ctrl+H</kbd> hidden · <kbd>Ctrl+D</kbd> for theme
       </p>
     </div>
   {/if}
 </main>
+
+<!-- STYLES -->
 
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -369,6 +401,11 @@
     border-bottom: 1px solid #e0e0e0;
   }
 
+  .header-actions {
+    display: flex;
+    gap: 0.5rem;
+  }
+
   h1 {
     font-size: 1.5rem;
     font-weight: 600;
@@ -383,11 +420,21 @@
     font-size: 1.2rem;
     cursor: pointer;
     transition: all 0.2s ease;
+    min-width: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .theme-toggle:hover {
     background: #f0f0f0;
     border-color: #ccc;
+  }
+
+  .theme-toggle.active {
+    background: #e3f2fd;
+    border-color: #4a9eff;
+    color: #4a9eff;
   }
 
   .toolbar {
@@ -410,20 +457,24 @@
     align-items: center;
     gap: 0.35rem;
     font-weight: 500;
+    white-space: nowrap;
   }
 
   button:hover:not(:disabled) {
     background: #f5f5f5;
     border-color: #bbb;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  }
+
+  button:active:not(:disabled) {
+    transform: translateY(0);
+    box-shadow: none;
   }
 
   button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
-  }
-
-  button .icon {
-    font-size: 1rem;
   }
 
   button svg {
@@ -484,6 +535,13 @@
     gap: 0.5rem;
     margin-bottom: 1rem;
     flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .folder-tools input {
+    flex: 1;
+    min-width: 200px;
+    max-width: 300px;
   }
 
   .status-bar {
@@ -514,9 +572,9 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0.625rem 1rem;
+    padding: 0.75rem 1rem;
     border-bottom: 1px solid #f0f0f0;
-    transition: background 0.15s ease;
+    transition: all 0.15s ease;
   }
 
   .file-item:last-child {
@@ -524,7 +582,8 @@
   }
 
   .file-item:hover {
-    background: #fafafa;
+    background: #f8f9fa;
+    transform: translateX(2px);
   }
 
   .file-info {
@@ -577,10 +636,12 @@
     border: 1px solid #e0e0e0;
     background: white;
     min-width: 0;
+    transition: all 0.15s ease;
   }
 
   .action-btn:hover {
     background: #f5f5f5;
+    transform: scale(1.05);
   }
 
   .action-btn.danger {
@@ -643,6 +704,11 @@
     border-color: #555 !important;
   }
 
+  :global(body.dark) .theme-toggle.active {
+    background: #1a3a52 !important;
+    border-color: #4a9eff !important;
+  }
+
   :global(body.dark) button {
     background: #2a2a2a !important;
     border-color: #444 !important;
@@ -682,15 +748,13 @@
     border-radius: 8px;
   }
 
-  /* Inputs / textareas */
-  :global(body.dark) input::placeholder,
-  :global(body.dark) textarea::placeholder {
+  /* Inputs */
+  :global(body.dark) input::placeholder {
     color: #9aa3ad !important;
     opacity: 1;
   }
 
-  :global(body.dark) input,
-  :global(body.dark) textarea {
+  :global(body.dark) input {
     color: #e0e0e0;
     background-color: #2a2a2a;
     border-color: #444;
@@ -699,7 +763,6 @@
   }
 
   :global(body.dark) input:focus,
-  :global(body.dark) textarea:focus,
   :global(body.dark) select:focus {
     box-shadow: 0 0 0 3px rgba(74,158,255,0.15) !important;
     border-color: #4a9eff !important;
@@ -707,8 +770,7 @@
 
   /* Disabled state */
   :global(body.dark) input:disabled,
-  :global(body.dark) select:disabled,
-  :global(body.dark) textarea:disabled {
+  :global(body.dark) select:disabled {
     opacity: 0.6;
     cursor: not-allowed;
   }
@@ -751,6 +813,7 @@
 
   :global(body.dark) .file-item:hover {
     background: #282828 !important;
+    transform: translateX(2px);
   }
 
   :global(body.dark) .file-name {

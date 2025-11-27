@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    cdmanager_lib::run()
+    sdmanager_lib::run()
 }
